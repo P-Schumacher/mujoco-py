@@ -22,7 +22,8 @@ include "mjsim.pyx"
 include "mjsimstate.pyx"
 include "mjrendercontext.pyx"
 include "mjbatchrenderer.pyx"
-include "mjpid.pyx"
+#include "mjpid.pyx"
+include "mjmuscle.pyx"
 
 cdef extern from "gl/glshim.h":
 
