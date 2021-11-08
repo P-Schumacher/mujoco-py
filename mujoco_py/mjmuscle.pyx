@@ -4,19 +4,21 @@ from mujoco_py.generated import const
 cdef struct muscle_input:
     mjtNum dt_seconds  # PID sampling time.
     mjtNum length
+    mjtNum velocity
+    mjtNum actuator_acc0
     mjtNum activation
+    mjtNum control
     mjtNum actuator_length_range_0
     mjtNum actuator_length_range_1
-    mjtNum actuator_acc0 
-    mjtNum range_0 
+    mjtNum range_0
     mjtNum range_1
     mjtNum force
     mjtNum scale
-    mjtNum lmin 
-    mjtNum lmax 
-    mjtNum vmax 
-    mjtNum fpmax 
-    mjtNum fvmax 
+    mjtNum lmin
+    mjtNum lmax
+    mjtNum vmax
+    mjtNum fpmax
+    mjtNum fvmax
 
 cdef struct muscle_output:
     mjtNum force
@@ -29,22 +31,29 @@ cdef mjtNum c_zero_gains(const mjModel*m, const mjData*d, int id) with gil:
 
 cdef muscle_output c_muscle_function(muscle_input parameters):
     """
-    
     :param parameters: PID parameters
     :return: A PID output struct containing the control output and the error state
     """
     cdef mjtNum force = 1 * parameters.control+ 0
+    force = bump(parameters.length, parameters.velocity, parameters.length, parameters.length)
     return muscle_output(force=force)
 
-cdef enum USER_DEFINED_ACTUATOR_PARAMS_MUSCLE:
-    IDX_RANGE_0 = 0,
-    IDX_RANGE_1 = 1,
-    IDX_ = 2,
-    IDX_DERIVATIVE_TIME_CONSTANT = 3,
-    IDX_DERIVATIVE_GAIN_SMOOTHING = 4,
-    IDX_ERROR_DEADBAND = 5,
+cdef bump(mjtNum length, mjtNum A, mjtNum mid, mjtNum B):
+    return 1
 
-cdef enum USER_DEFINED_CONTROLLER_DATA_MUSCLE:
+cdef passive_force(mjtNum length, mjtNum fpmax, mjtNum b):
+    return 1
+
+cdef active_velocity(mjtNum velocity, mjtNum c, mjtNum vmax, mjtNum fvmax):
+    return 1
+
+cdef rescale_length(mjtNum length, int id):
+    return length
+
+cdef rescale_velocity(mjtNum velocity, int id):
+    return velocity
+
+cdef enum USER_DEFINED_ACTUATOR_PARAMS_MUSCLE:
     IDX_RANGE_0 = 0,
     IDX_RANGE_1 = 1,
     IDX_FORCE = 2,
@@ -54,6 +63,8 @@ cdef enum USER_DEFINED_CONTROLLER_DATA_MUSCLE:
     IDX_VMAX= 6,
     IDX_FPMAX = 7,
     IDX_FVMAX= 8,
+
+cdef enum USER_DEFINED_CONTROLLER_DATA_MUSCLE:
     NUM_USER_DATA_PER_ACT = 1,
 
 cdef mjtNum c_muscle_bias(const mjModel*m, const mjData*d, int id):
@@ -64,12 +75,21 @@ cdef mjtNum c_muscle_bias(const mjModel*m, const mjData*d, int id):
     result = c_muscle_function(parameters=muscle_input(
         dt_seconds=dt_in_sec,
         length=d.actuator_length[id],
+        velocity=d.actuator_velocity[id],
+        actuator_acc0=m.actuator_acc0[id],
         activation=d.act[id],
+        control=d.ctrl[id],
         actuator_length_range_0=m.actuator_lengthrange[2 * id],
         actuator_length_range_1=m.actuator_lengthrange[2 * id + 1],
         range_0=m.actuator_gainprm[id + IDX_RANGE_0],
-        range_1=m.actuator_gainprm[idx + IDX_RANGE_1],
-        control=d.ctrl[id]))
+        range_1=m.actuator_gainprm[id + IDX_RANGE_1],
+        force=m.actuator_gainprm[id + IDX_FORCE],
+        scale=m.actuator_gainprm[id + IDX_SCALE],
+        lmin=m.actuator_gainprm[id + IDX_LMIN],
+        lmax=m.actuator_gainprm[id + IDX_LMAX],
+        vmax=m.actuator_gainprm[id + IDX_VMAX],
+        fpmax=m.actuator_gainprm[id + IDX_FPMAX],
+        fvmax=m.actuator_gainprm[id + IDX_FVMAX]))
     return result.force 
 
 cdef enum USER_DEFINED_ACTUATOR_DATA:
