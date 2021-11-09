@@ -1,6 +1,7 @@
 from libc.math cimport fabs, fmax, fmin
 from mujoco_py.generated import const
 
+
 cdef struct muscle_input:
     mjtNum dt_seconds  # PID sampling time.
     mjtNum length
@@ -19,6 +20,9 @@ cdef struct muscle_input:
     mjtNum vmax
     mjtNum fpmax
     mjtNum fvmax
+    mjtNum FL_use
+    mjtNum FV_use
+    mjtNum PF_use
 
 
 cdef struct muscle_output:
@@ -49,23 +53,26 @@ cdef muscle_output c_muscle_function(muscle_input parameters):
     cdef mjtNum FV = active_velocity(rescaled_velocity, c, parameters.vmax, parameters.fvmax)
     cdef mjtNum PF = passive_force(rescaled_length, parameters.fpmax, b)
     cdef mjtNum peak_force = get_peak_force(parameters.force, parameters.scale, parameters.actuator_acc0)
-    force = force_output(parameters.activation, FL, FV, PF, peak_force)
+    force = force_output(parameters.activation, FL, FV, PF, peak_force, parameters.FL_use, parameters.FV_use, parameters.PF_use)
     return muscle_output(force=force)
 
 
-cdef force_output(mjtNum activation, mjtNum FL, mjtNum FV, mjtNum PF, mjtNum peak_force):
+cdef mjtNum force_output(mjtNum activation, mjtNum FL, mjtNum FV, mjtNum PF, mjtNum peak_force, mjtNum FL_use, mjtNum FV_use, mjtNum PF_use):
     # TODO implement a way of just activating additional components without having to go through every if-case
-    return - (FL * FV * activation + PF) * peak_force
+    FL = 1 + FL_use * (FL - 1)
+    FV = 1 + FV_use * (FV - 1)
+    PF = 1 + PF_use * (PF - 1)
+    return - (FL  * FV * activation + PF) * peak_force
 
 
-cdef get_peak_force(mjtNum force, mjtNum scale, mjtNum actuator_acc0):
+cdef mjtNum get_peak_force(mjtNum force, mjtNum scale, mjtNum actuator_acc0):
     if (force + 1) < 0.01:
         return scale / actuator_acc0
     else: 
         return force
 
 
-cdef bump(mjtNum length, mjtNum A, mjtNum mid, mjtNum B):
+cdef mjtNum bump(mjtNum length, mjtNum A, mjtNum mid, mjtNum B):
     cdef mjtNum left = 0.5 * (A + mid)
     cdef mjtNum right = 0.5 * (mid + B)
     cdef mjtNum temp = 0
@@ -86,7 +93,7 @@ cdef bump(mjtNum length, mjtNum A, mjtNum mid, mjtNum B):
         return 0.5 * temp * temp
 
 
-cdef passive_force(mjtNum length, mjtNum fpmax, mjtNum b):
+cdef mjtNum passive_force(mjtNum length, mjtNum fpmax, mjtNum b):
     cdef mjtNum temp = 0
 
     if (length <= 1):
@@ -99,7 +106,7 @@ cdef passive_force(mjtNum length, mjtNum fpmax, mjtNum b):
         return 0.25 * fpmax * (1 + 3 * temp)
 
 
-cdef active_velocity(mjtNum velocity, mjtNum c, mjtNum vmax, mjtNum fvmax):
+cdef mjtNum active_velocity(mjtNum velocity, mjtNum c, mjtNum vmax, mjtNum fvmax):
     cdef mjtNum eff_vel = velocity / vmax
     if (eff_vel < -1):
         return 0
@@ -111,13 +118,13 @@ cdef active_velocity(mjtNum velocity, mjtNum c, mjtNum vmax, mjtNum fvmax):
         return fvmax
 
 
-cdef rescale_length(mjtNum length, mjtNum range_0, mjtNum range_1, mjtNum act_length_range_0, mjtNum act_length_range_1):
+cdef mjtNum rescale_length(mjtNum length, mjtNum range_0, mjtNum range_1, mjtNum act_length_range_0, mjtNum act_length_range_1):
     cdef mjtNum L0  = (act_length_range_1 - act_length_range_0) / (range_1 * (1  - (range_0/range_1)))
     cdef mjtNum LT = act_length_range_0 - range_0 * L0
     return (length - LT) / L0
 
 
-cdef rescale_velocity(mjtNum velocity, mjtNum range_0, mjtNum range_1, mjtNum act_length_range_0, mjtNum act_length_range_1):
+cdef mjtNum rescale_velocity(mjtNum velocity, mjtNum range_0, mjtNum range_1, mjtNum act_length_range_0, mjtNum act_length_range_1):
     cdef mjtNum L0  = (act_length_range_1 - act_length_range_0) / (range_1 - range_0)
     return velocity / L0
 
@@ -135,7 +142,12 @@ cdef enum USER_DEFINED_ACTUATOR_PARAMS_MUSCLE:
 
 
 cdef enum USER_DEFINED_CONTROLLER_DATA_MUSCLE:
-    NUM_USER_DATA_PER_ACT = 1,
+    NUM_USER_DATA_PER_ACT = 1
+    NUM_ACTUATOR_DATA = 1
+    IDX_USER_FL = 0
+    IDX_USER_FV = 1
+    IDX_USER_PF = 2
+    IDX_USER_DYN = 3
 
 
 cdef mjtNum c_muscle_bias(const mjModel*m, const mjData*d, int id):
@@ -160,14 +172,12 @@ cdef mjtNum c_muscle_bias(const mjModel*m, const mjData*d, int id):
         lmax=m.actuator_gainprm[IDX_LMAX],
         vmax=m.actuator_gainprm[IDX_VMAX],
         fpmax=m.actuator_gainprm[IDX_FPMAX],
-        fvmax=m.actuator_gainprm[IDX_FVMAX]))
+        fvmax=m.actuator_gainprm[IDX_FVMAX],
+        FL_use=d.userdata[IDX_USER_FL],
+        FV_use=d.userdata[IDX_USER_FV],
+        PF_use=d.userdata[IDX_USER_PF]))
     #print(f' Vmax is {m.actuator_gainprm[IDX_VMAX]} for actuator')
     return result.force 
-
-
-cdef enum USER_DEFINED_ACTUATOR_DATA:
-    IDX_CONTROLLER_TYPE = 0
-    NUM_ACTUATOR_DATA = 1
 
 
 cdef mjtNum c_custom_bias(const mjModel*m, const mjData*d, int id) with gil:
@@ -184,7 +194,7 @@ cdef mjtNum c_custom_bias(const mjModel*m, const mjData*d, int id) with gil:
     #controller_type = int(m.actuator_user[id * m.nuser_actuator + IDX_CONTROLLER_TYPE])
     return c_muscle_bias(m, d, id)
 
-def set_muscle_control(m, d):
+def set_muscle_control(m, d, FL=1, FV=1, PF=1, dyn=1):
     global mjcb_act_gain
     global mjcb_act_bias
 
@@ -196,6 +206,5 @@ def set_muscle_control(m, d):
 
     for i in range(m.nuserdata):
         d.userdata[i] = 0.0
-
     mjcb_act_gain = c_zero_gains
     mjcb_act_bias = c_custom_bias
