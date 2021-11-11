@@ -64,10 +64,12 @@ cdef mjtNum force_output(mjtNum activation, mjtNum FL, mjtNum FV, mjtNum PF, mjt
     # TODO implement a way of just activating additional components without having to go through every if-case
     FL = 1 + FL_use * (FL - 1)
     FV = 1 + FV_use * (FV - 1)
-    PF = 1 + PF_use * (PF - 1)
+    # PassiveForce needs to be 0 when turned off, the others need to 1 
+    PF = FL_use * PF 
     cdef mjtNum output = - (FL  * FV * activation + PF) * peak_force
     #print(f' FL {FL} FV {FV} activation {activation} PF {PF} peak_force {peak_force}')
     #print(f' FL_use {FL_use} FV_use {FV_use} PF_use {PF_use}')
+    #print(f' resulting force {output}')
     return output
 
 
