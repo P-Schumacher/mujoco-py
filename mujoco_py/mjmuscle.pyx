@@ -3,6 +3,7 @@ from mujoco_py.generated import const
 
 
 cdef struct muscle_input:
+    int dyntype
     mjtNum dt_seconds  # PID sampling time.
     mjtNum length
     mjtNum velocity
@@ -41,11 +42,11 @@ cdef muscle_output c_muscle_function(muscle_input parameters):
     :param parameters: PID parameters
     :return: A PID output struct containing the control output and the error state
     """
-    
+
     cdef mjtNum a = 0.5 * (parameters.lmin + 1)
     cdef mjtNum b = 0.5 * (parameters.lmax  + 1)
     cdef mjtNum c = parameters.fvmax - 1
-    
+
 
     cdef mjtNum rescaled_length = rescale_length(parameters.length, parameters.range_0, parameters.range_1, parameters.act_length_range_0, parameters.act_length_range_1)
     cdef mjtNum rescaled_velocity = rescale_velocity(parameters.velocity, parameters.range_0, parameters.range_1, parameters.act_length_range_0, parameters.act_length_range_1)
@@ -53,7 +54,9 @@ cdef muscle_output c_muscle_function(muscle_input parameters):
     cdef mjtNum FV = active_velocity(rescaled_velocity, c, parameters.vmax, parameters.fvmax)
     cdef mjtNum PF = passive_force(rescaled_length, parameters.fpmax, b)
     cdef mjtNum peak_force = get_peak_force(parameters.force, parameters.scale, parameters.actuator_acc0)
-    force = force_output(parameters.activation, FL, FV, PF, peak_force, parameters.FL_use, parameters.FV_use, parameters.PF_use)
+    cdef mjtNum activation
+    activation = parameters.control if parameters.dyntype == 0 else parameters.activation
+    force = force_output(activation, FL, FV, PF, peak_force, parameters.FL_use, parameters.FV_use, parameters.PF_use)
     return muscle_output(force=force)
 
 
@@ -62,13 +65,16 @@ cdef mjtNum force_output(mjtNum activation, mjtNum FL, mjtNum FV, mjtNum PF, mjt
     FL = 1 + FL_use * (FL - 1)
     FV = 1 + FV_use * (FV - 1)
     PF = 1 + PF_use * (PF - 1)
-    return - (FL  * FV * activation + PF) * peak_force
+    cdef mjtNum output = - (FL  * FV * activation + PF) * peak_force
+    #print(f' FL {FL} FV {FV} activation {activation} PF {PF} peak_force {peak_force}')
+    #print(f' FL_use {FL_use} FV_use {FV_use} PF_use {PF_use}')
+    return output
 
 
 cdef mjtNum get_peak_force(mjtNum force, mjtNum scale, mjtNum actuator_acc0):
     if (force + 1) < 0.01:
         return scale / actuator_acc0
-    else: 
+    else:
         return force
 
 
@@ -157,6 +163,7 @@ cdef mjtNum c_muscle_bias(const mjModel*m, const mjData*d, int id):
     cdef mjtNum dt_in_sec = m.opt.timestep
     result = c_muscle_function(parameters=muscle_input(
         dt_seconds=dt_in_sec,
+        dyntype=m.actuator_dyntype[0],
         length=d.actuator_length[id],
         velocity=d.actuator_velocity[id],
         actuator_acc0=m.actuator_acc0[id],
@@ -198,10 +205,10 @@ def set_muscle_control(m, d, FL=1, FV=1, PF=1, dyn=1):
     global mjcb_act_gain
     global mjcb_act_bias
 
-    if m.nuserdata < m.nu * NUM_USER_DATA_PER_ACT:
-        raise Exception('nuserdata is not set large enough to store PID internal states.')
+    if m.nuserdata < m.nu * NUM_ACTUATOR_DATA:
+        raise Exception(f'nuserdata is not set large enough to store PID internal states. It is {m.nuserdata} but should be {m.nu * NUM_USER_DATA_PER_ACT}')
 
-    if m.nuser_actuator < m.nu * NUM_ACTUATOR_DATA:
+    if m.nuser_actuator < m.nu * NUM_USER_DATA_PER_ACT:
         raise Exception(f'nuser_actuator is not set large enough to store controller types. It is {m.nuser_actuator} but should be {m.nu * NUM_ACTUATOR_DATA}')
 
     for i in range(m.nuserdata):
